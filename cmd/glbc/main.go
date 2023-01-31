@@ -346,6 +346,9 @@ func runControllers(ctx *ingctx.ControllerContext) {
 			klog.Errorf("Failed tp retrieve pod label propagation config: %v", err)
 		}
 	}
+
+	logger := klog.TODO() // TODO(#1761): Replace this with a top level logger configuration once one is available.
+	cloud := negtypes.NewAdapter(ctx.Cloud)
 	// TODO: Refactor NEG to use cloud mocks so ctx.Cloud can be referenced within NewController.
 	negController := neg.NewController(
 		ctx.KubeClient,
@@ -361,7 +364,7 @@ func runControllers(ctx *ingctx.ControllerContext) {
 		ctx.ControllerMetrics,
 		ctx.L4Namer,
 		ctx.DefaultBackendSvcPort,
-		negtypes.NewAdapter(ctx.Cloud),
+		cloud,
 		zoneGetter,
 		ctx.ClusterNamer,
 		flags.F.ResyncPeriod,
@@ -375,7 +378,7 @@ func runControllers(ctx *ingctx.ControllerContext) {
 		enableAsm,
 		asmServiceNEGSkipNamespaces,
 		lpConfig,
-		klog.TODO(), // TODO(#1761): Replace this with a top level logger configuration once one is available.
+		logger,
 	)
 
 	ctx.AddHealthCheck("neg-controller", negController.IsHealthy)
