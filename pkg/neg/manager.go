@@ -294,13 +294,17 @@ func (manager *syncerManager) StopSyncer(namespace, name string) {
 
 // Sync signals all syncers related to the service to sync.
 func (manager *syncerManager) Sync(namespace, name string) {
+	manager.logger.V(3).Info("alexkats: main: Manager: Syncing (before lock)", "namespace", namespace, "name", name)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.logger.V(3).Info("alexkats: main: Manager: Syncing (after lock)", "namespace", namespace, "name", name)
 	key := getServiceKey(namespace, name)
 	if portInfoMap, ok := manager.svcPortMap[key]; ok {
 		for svcPort, portInfo := range portInfoMap {
 			if syncer, ok := manager.syncerMap[manager.getSyncerKey(namespace, name, svcPort, portInfo)]; ok {
+				manager.logger.V(3).Info("alexkats: main: Manager: Trying to sync", "namespace", namespace, "name", name)
 				if !syncer.IsStopped() {
+					manager.logger.V(3).Info("alexkats: main: Manager: Syncer IS NOT stopped while trying to sync", "namespace", namespace, "name", name)
 					syncer.Sync()
 				}
 			}
@@ -311,15 +315,19 @@ func (manager *syncerManager) Sync(namespace, name string) {
 // SyncNodes signals all GCE_VM_IP syncers to sync.
 // Only these use nodes selected at random as endpoints and hence need to sync upon node updates.
 func (manager *syncerManager) SyncNodes() {
+	manager.logger.V(3).Info("alexkats: main: Manager: Syncing node (before lock)")
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.logger.V(3).Info("alexkats: main: Manager: Syncing node (after lock)")
 
 	// When a zone change occurs (new zone is added or deleted), a sync should be triggered
 	isVmIpZoneChange := updateZoneMap(&manager.vmIpZoneMap, negtypes.NodePredicateForNetworkEndpointType(negtypes.VmIpEndpointType), manager.zoneGetter, manager.logger)
 	isVmIpPortZoneChange := updateZoneMap(&manager.vmIpPortZoneMap, negtypes.NodePredicateForNetworkEndpointType(negtypes.VmIpPortEndpointType), manager.zoneGetter, manager.logger)
 
 	for key, syncer := range manager.syncerMap {
+		manager.logger.V(3).Info("alexkats: main: Manager: Syncing node (another syncer)", "key", key)
 		if syncer.IsStopped() {
+			manager.logger.V(3).Info("alexkats: main: Manager: Syncing node (another syncer) is stopped for this syncer")
 			continue
 		}
 
@@ -365,8 +373,10 @@ func updateZoneMap(existingZoneMap *map[string]struct{}, candidateNodePredicate 
 
 // ShutDown signals all syncers to stop
 func (manager *syncerManager) ShutDown() {
+	manager.logger.V(3).Info("alexkats: main: Manager: Shutting down (before lock)")
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.logger.V(3).Info("alexkats: main: Manager: Shutting down (after lock)")
 	for _, s := range manager.syncerMap {
 		s.Stop()
 	}

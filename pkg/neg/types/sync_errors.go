@@ -39,11 +39,12 @@ const (
 	ReasonEPPodLabelMismatch        = Reason("EPPodLabelMismatch")
 
 	// these are for non error-state error
-	ReasonNegNotFound          = Reason("NegNotFound")
-	ReasonCurrentNegEPNotFound = Reason("CurrentNegEPNotFound")
-	ReasonEPSNotFound          = Reason("EPSNotFound")
-	ReasonOtherError           = Reason("OtherError")
-	ReasonSuccess              = Reason("Success")
+	ReasonNegNotFound               = Reason("NegNotFound")
+	ReasonCurrentNegEPNotFound      = Reason("CurrentNegEPNotFound")
+	ReasonEPSNotFound               = Reason("EPSNotFound")
+	ReasonQuotaExceededWithStrategy = Reason("QuotaExceededWithStrategy")
+	ReasonOtherError                = Reason("OtherError")
+	ReasonSuccess                   = Reason("Success")
 )
 
 var (
@@ -158,6 +159,11 @@ var (
 		Reason:       ReasonEPSNotFound,
 		IsErrorState: false,
 	}
+	ErrQuotaExceededWithStrategy = NegSyncError{
+		Err:          errors.New("quota exceeded when using strategy"),
+		Reason:       ReasonQuotaExceededWithStrategy,
+		IsErrorState: false,
+	}
 )
 
 // other errors encountered during sync are considered as OtherError in metrics
@@ -186,11 +192,12 @@ func ClassifyError(err error) NegSyncError {
 			IsErrorState: false,
 		}
 	}
+	return syncErrType
 	// unwrap error till we get NegSyncError, so we can check error state
-	for {
+	/*for {
 		if syncErr, ok := err.(NegSyncError); ok {
 			return syncErr
 		}
 		err = errors.Unwrap(err)
-	}
+	}*/
 }

@@ -208,72 +208,100 @@ func GetEndpointsCalculator(podLister, nodeLister, serviceLister cache.Indexer, 
 }
 
 func (s *transactionSyncer) sync() error {
+	s.logger.V(3).Info("alexkats: main: Transaction: sync 1", "negSyncerKey", s.NegSyncerKey.String())
 	err := s.syncInternal()
+	s.logger.V(3).Info("alexkats: main: Transaction: sync 2", "negSyncerKey", s.NegSyncerKey.String())
 	if err != nil {
+		s.logger.V(3).Info("alexkats: main: Transaction: sync 3.1 (before lock)", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 		s.syncLock.Lock()
+		s.logger.V(3).Info("alexkats: main: Transaction: sync 3.2 (after lock)", "negSyncerKey", s.NegSyncerKey.String())
 		s.needInit = true
 		s.syncLock.Unlock()
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: sync 4", "negSyncerKey", s.NegSyncerKey.String())
 	return err
 }
 
 func (s *transactionSyncer) syncInternal() error {
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal (before lock)", "negSyncerKey", s.NegSyncerKey.String())
 	s.syncLock.Lock()
 	defer s.syncLock.Unlock()
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal (after lock)", "negSyncerKey", s.NegSyncerKey.String())
 
 	start := time.Now()
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 1", "negSyncerKey", s.NegSyncerKey.String())
 	err := s.syncInternalImpl()
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 2", "negSyncerKey", s.NegSyncerKey.String())
 	if err != nil {
+		s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 3.1", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 		if syncErr := negtypes.ClassifyError(err); syncErr.IsErrorState {
-			s.logger.V(3).Info("Updating error state", "error state", syncErr.Reason)
+			s.logger.V(3).Info("alexkats: main: Transaction: Updating error state", "error state", syncErr.Reason)
 			s.setErrorState()
 		}
+		s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 3.2", "negSyncerKey", s.NegSyncerKey.String())
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 4", "negSyncerKey", s.NegSyncerKey.String())
 	s.updateStatus(err)
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 5", "negSyncerKey", s.NegSyncerKey.String())
 	metrics.PublishNegSyncMetrics(string(s.NegSyncerKey.NegType), string(s.endpointsCalculator.Mode()), err, start)
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 6", "negSyncerKey", s.NegSyncerKey.String())
 	s.syncMetricsCollector.UpdateSyncerStatusInMetrics(s.NegSyncerKey, err)
+	s.logger.V(3).Info("alexkats: main: Transaction: syncInternal 7", "negSyncerKey", s.NegSyncerKey.String())
 	return err
 }
 
 func (s *transactionSyncer) syncInternalImpl() error {
 	if s.syncer.IsStopped() || s.syncer.IsShuttingDown() {
-		s.logger.V(3).Info("Skip syncing NEG", "negSyncerKey", s.NegSyncerKey.String())
+		s.logger.V(3).Info("alexkats: main: Transaction: Skip syncing NEG", "negSyncerKey", s.NegSyncerKey.String())
 		return nil
 	}
 	if s.needInit || s.isZoneChange() {
 		if err := s.ensureNetworkEndpointGroups(); err != nil {
+			s.logger.V(3).Info("alexkats: main: Transaction: Error in ensuringNEGs", "err", err)
 			return fmt.Errorf("%w: %v", negtypes.ErrNegNotFound, err)
 		}
 		s.needInit = false
 	}
-	s.logger.V(2).Info("Sync NEG", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
+	s.logger.V(2).Info("alexkats: main: Transaction: Sync NEG", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 
 	currentMap, currentPodLabelMap, err := retrieveExistingZoneNetworkEndpointMap(s.NegSyncerKey.NegName, s.zoneGetter, s.cloud, s.NegSyncerKey.GetAPIVersion(), s.endpointsCalculator.Mode(), s.enableDualStackNEG)
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 1", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode(), "err", err)
 	if err != nil {
-		return fmt.Errorf("%w: %v", negtypes.ErrCurrentNegEPNotFound, err)
+		if syncErr := negtypes.ClassifyError(err); syncErr.Reason != negtypes.ReasonQuotaExceededWithStrategy {
+			err = fmt.Errorf("%w: %w", negtypes.ErrCurrentNegEPNotFound, err)
+		}
+		return err
 	}
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 2", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 	s.logStats(currentMap, "current NEG endpoints")
 
 	// Merge the current state from cloud with the transaction table together
 	// The combined state represents the eventual result when all transactions completed
 	mergeTransactionIntoZoneEndpointMap(currentMap, s.transactions, s.logger)
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 3", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 	s.logStats(currentMap, "after in-progress operations have completed, NEG endpoints")
 
 	var targetMap map[string]negtypes.NetworkEndpointSet
 	var endpointPodMap negtypes.EndpointPodMap
 	slices, err := s.endpointSliceLister.ByIndex(endpointslices.EndpointSlicesByServiceIndex, endpointslices.FormatEndpointSlicesServiceKey(s.Namespace, s.Name))
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 4", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode(), "err", err)
 	if err != nil {
 		return fmt.Errorf("%w: %v", negtypes.ErrEPSNotFound, err)
 	}
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 5", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 	if len(slices) < 1 {
-		s.logger.Error(nil, "Endpoint slices for the service doesn't exist. Skipping NEG sync")
+		s.logger.Error(nil, "alexkats: main: Transaction: Endpoint slices for the service doesn't exist. Skipping NEG sync")
 		return nil
 	}
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 6", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 	endpointSlices := convertUntypedToEPS(slices)
 	s.computeEPSStaleness(endpointSlices)
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 7", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 
 	endpointsData := negtypes.EndpointsDataFromEndpointSlices(endpointSlices)
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 8", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 	targetMap, endpointPodMap, err = s.getEndpointsCalculation(endpointsData, currentMap)
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl 9", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 
 	if !s.enableDegradedMode && err != nil {
 		return err
@@ -326,13 +354,16 @@ func (s *transactionSyncer) syncInternalImpl() error {
 	}
 
 	s.syncMetricsCollector.SetLabelPropagationStats(s.NegSyncerKey, collectLabelStats(currentPodLabelMap, endpointPodLabelMap, targetMap))
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl before commit", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
 
 	if s.needCommit() {
 		s.commitPods(committedEndpoints, endpointPodMap)
 	}
 
+	s.logger.V(2).Info("alexkats: main: Transaction: syncInternalImpl after commit", "negSyncerKey", s.NegSyncerKey.String(), "endpointsCalculatorMode", s.endpointsCalculator.Mode())
+
 	if len(addEndpoints) == 0 && len(removeEndpoints) == 0 {
-		s.logger.V(3).Info("No endpoint change. Skip syncing NEG. ", s.Namespace, s.Name)
+		s.logger.V(3).Info("alexkats: main: Transaction: No endpoint change. Skip syncing NEG. ", s.Namespace, s.Name)
 		return nil
 	}
 	s.logEndpoints(addEndpoints, "adding endpoint")
@@ -422,11 +453,12 @@ func (s *transactionSyncer) ensureNetworkEndpointGroups() error {
 
 // syncNetworkEndpoints spins off go routines to execute NEG operations
 func (s *transactionSyncer) syncNetworkEndpoints(addEndpoints, removeEndpoints map[string]negtypes.NetworkEndpointSet, endpointPodLabelMap labels.EndpointPodLabelMap, migrationZone string) error {
+	s.logger.V(3).Info("alexkats: main: Transaction: syncNetworkEndpoints start", "negSyncerKey", s.NegSyncerKey.String())
 	syncFunc := func(endpointMap map[string]negtypes.NetworkEndpointSet, operation transactionOp) error {
 		for zone, endpointSet := range endpointMap {
 			zone := zone
 			if endpointSet.Len() == 0 {
-				s.logger.V(2).Info("0 endpoints in the endpoint list. Skipping operation", "operation", attachOp, "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
+				s.logger.V(2).Info("alexkats: main: Transaction: 0 endpoints in the endpoint list. Skipping operation", "operation", attachOp, "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
 				continue
 			}
 
@@ -472,7 +504,7 @@ func (s *transactionSyncer) syncNetworkEndpoints(addEndpoints, removeEndpoints m
 
 // attachNetworkEndpoints runs operation for attaching network endpoints.
 func (s *transactionSyncer) attachNetworkEndpoints(zone string, networkEndpointMap map[negtypes.NetworkEndpoint]*composite.NetworkEndpoint) {
-	s.logger.V(2).Info("Attaching endpoints to NEG.", "countOfEndpointsBeingAttached", len(networkEndpointMap), "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
+	s.logger.V(2).Info("alexkats: main: Transaction: Attaching endpoints to NEG.", "countOfEndpointsBeingAttached", len(networkEndpointMap), "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
 	err := s.operationInternal(attachOp, zone, networkEndpointMap)
 
 	// WARNING: commitTransaction must be called at last for analyzing the operation result
@@ -481,7 +513,7 @@ func (s *transactionSyncer) attachNetworkEndpoints(zone string, networkEndpointM
 
 // detachNetworkEndpoints runs operation for detaching network endpoints.
 func (s *transactionSyncer) detachNetworkEndpoints(zone string, networkEndpointMap map[negtypes.NetworkEndpoint]*composite.NetworkEndpoint, hasMigrationDetachments bool) {
-	s.logger.V(2).Info("Detaching endpoints from NEG.", "countOfEndpointsBeingDetached", len(networkEndpointMap), "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
+	s.logger.V(2).Info("alexkats: main: Transaction: Detaching endpoints from NEG.", "countOfEndpointsBeingDetached", len(networkEndpointMap), "negSyncerKey", s.NegSyncerKey.String(), "zone", zone)
 	err := s.operationInternal(detachOp, zone, networkEndpointMap)
 
 	if hasMigrationDetachments {
@@ -505,6 +537,19 @@ func (s *transactionSyncer) operationInternal(operation transactionOp, zone stri
 		networkEndpoints = append(networkEndpoints, ne)
 	}
 
+	wg1 := &sync.WaitGroup{}
+	wg1.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(iter int) {
+			_, err := s.cloud.ListNetworkEndpoints(s.NegSyncerKey.NegName, zone, true, s.NegSyncerKey.GetAPIVersion())
+			if err != nil {
+				s.logger.Error(err, "alexkats: main: Transaction: Failed to ListNetworkEndpoint in NEG inside my iterations", "neg", s.NegSyncerKey.String(), "iteration", iter)
+			}
+			wg1.Done()
+		}(i)
+	}
+	wg1.Wait()
+
 	if operation == attachOp {
 		err = s.cloud.AttachNetworkEndpoints(s.NegSyncerKey.NegName, zone, networkEndpoints, s.NegSyncerKey.GetAPIVersion())
 	}
@@ -524,7 +569,7 @@ func (s *transactionSyncer) operationInternal(operation transactionOp, zone stri
 		// we would set error state and retry. For successful calls, we won't update
 		// error state, so its value won't be overwritten within API call go routines.
 		if syncErr.IsErrorState {
-			s.logger.V(3).Info("Updating error state", "error state", syncErr.Reason)
+			s.logger.V(3).Info("alexkats: main: Transaction: Updating error state", "error state", syncErr.Reason)
 			s.syncLock.Lock()
 			s.setErrorState()
 			s.syncLock.Unlock()
@@ -566,8 +611,10 @@ func (s *transactionSyncer) recordEvent(eventType, reason, eventDesc string) {
 // 1. Any of the transaction committed needed to be reconciled
 // 2. Input error was not nil
 func (s *transactionSyncer) commitTransaction(err error, networkEndpointMap map[negtypes.NetworkEndpoint]*composite.NetworkEndpoint) {
+	s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction (before lock)", "negSyncerKey", s.NegSyncerKey.String())
 	s.syncLock.Lock()
 	defer s.syncLock.Unlock()
+	s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction (after lock)", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 
 	// If error is not nil, trigger backoff retry
 	// If any transaction needs reconciliation, trigger resync.
@@ -585,18 +632,27 @@ func (s *transactionSyncer) commitTransaction(err error, networkEndpointMap map[
 		_, ok := s.transactions.Get(networkEndpoint)
 		// clear transaction
 		if !ok {
-			s.logger.Error(nil, "Endpoint was not found in the transaction table.", "endpoint", networkEndpoint)
+			s.logger.Error(nil, "alexkats: main: Transaction: Endpoint was not found in the transaction table.", "endpoint", networkEndpoint)
 			continue
 		}
 		s.transactions.Delete(networkEndpoint)
 	}
 
 	if needRetry {
-		if retryErr := s.retry.Retry(); retryErr != nil {
-			s.recordEvent(apiv1.EventTypeWarning, "RetryFailed", fmt.Sprintf("Failed to retry NEG sync for %q: %v", s.NegSyncerKey.String(), retryErr))
+		s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction 1 needRetry", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
+		if syncErr := negtypes.ClassifyError(err); syncErr.Reason == negtypes.ReasonQuotaExceededWithStrategy {
+			s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction 2.1-1 quota", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
+			s.syncer.Sync()
+		} else {
+			s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction 2.2-1 NOT quota", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
+			if retryErr := s.retry.Retry(); retryErr != nil {
+				s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction 2.2-2 NOT quota and no more retries", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
+				s.recordEvent(apiv1.EventTypeWarning, "RetryFailed", fmt.Sprintf("Failed to retry NEG sync for %q: %v", s.NegSyncerKey.String(), retryErr))
+			}
 		}
 		return
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: commitTransaction 3 no error", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 	s.retry.Reset()
 	// always trigger Sync to commit pods
 	s.syncer.Sync()
@@ -610,12 +666,13 @@ func (s *transactionSyncer) needCommit() bool {
 
 // commitPods groups the endpoints by zone and signals the readiness reflector to poll pods of the NEG
 func (s *transactionSyncer) commitPods(endpointMap map[string]negtypes.NetworkEndpointSet, endpointPodMap negtypes.EndpointPodMap) {
+	s.logger.V(3).Info("alexkats: main: Transaction: commitPods", "negSyncerKey", s.NegSyncerKey.String())
 	for zone, endpointSet := range endpointMap {
 		zoneEndpointMap := negtypes.EndpointPodMap{}
 		for _, endpoint := range endpointSet.List() {
 			podName, ok := endpointPodMap[endpoint]
 			if !ok {
-				s.logger.Error(nil, "Endpoint is not included in the endpointPodMap", "endpoint", endpoint, "endpointPodMap", endpointPodMap)
+				s.logger.Error(nil, "alexkats: main: Transaction: Endpoint is not included in the endpointPodMap", "endpoint", endpoint, "endpointPodMap", endpointPodMap)
 				continue
 			}
 			zoneEndpointMap[endpoint] = podName
@@ -739,33 +796,49 @@ func (s *transactionSyncer) updateInitStatus(negObjRefs []negv1beta1.NegObjectRe
 
 // updateStatus will update the Synced condition as needed on the corresponding neg cr. If the Initialized condition or NetworkEndpointGroups are missing, needInit will be set to true. LastSyncTime will be updated as well.
 func (s *transactionSyncer) updateStatus(syncErr error) {
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 1", "negSyncerKey", s.NegSyncerKey.String(), "syncErr", syncErr)
 	if s.svcNegClient == nil {
 		return
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 2", "negSyncerKey", s.NegSyncerKey.String())
 	origNeg, err := getNegFromStore(s.svcNegLister, s.Namespace, s.NegSyncerKey.NegName)
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 3", "negSyncerKey", s.NegSyncerKey.String())
 	if err != nil {
-		s.logger.Error(err, "Error updating status for neg, failed to get neg from store")
+		s.logger.Error(err, "alexkats: main: Transaction: Error updating status for neg, failed to get neg from store")
 		return
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 4", "negSyncerKey", s.NegSyncerKey.String())
 	neg := origNeg.DeepCopy()
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 5", "negSyncerKey", s.NegSyncerKey.String())
 
 	ts := metav1.Now()
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 6", "negSyncerKey", s.NegSyncerKey.String())
 	if _, _, exists := findCondition(neg.Status.Conditions, negv1beta1.Initialized); !exists {
+		s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 6.1", "negSyncerKey", s.NegSyncerKey.String())
 		s.needInit = true
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 7", "negSyncerKey", s.NegSyncerKey.String())
 	metrics.PublishNegSyncerStalenessMetrics(ts.Sub(neg.Status.LastSyncTime.Time))
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 8", "negSyncerKey", s.NegSyncerKey.String())
 
 	ensureCondition(neg, getSyncedCondition(syncErr))
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 9", "negSyncerKey", s.NegSyncerKey.String())
 	neg.Status.LastSyncTime = ts
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 10", "negSyncerKey", s.NegSyncerKey.String())
 
 	if len(neg.Status.NetworkEndpointGroups) == 0 {
+		s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 10.1", "negSyncerKey", s.NegSyncerKey.String())
 		s.needInit = true
 	}
 
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 11", "negSyncerKey", s.NegSyncerKey.String())
 	_, err = patchNegStatus(s.svcNegClient, origNeg.Status, neg.Status, s.Namespace, s.NegSyncerKey.NegName)
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 12", "negSyncerKey", s.NegSyncerKey.String())
 	if err != nil {
+		s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 12.1", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 		s.logger.Error(err, "Error updating Neg CR")
 	}
+	s.logger.V(3).Info("alexkats: main: Transaction: updateStatus 13", "negSyncerKey", s.NegSyncerKey.String())
 }
 
 func convertUntypedToEPS(endpointSliceUntyped []interface{}) []*discovery.EndpointSlice {

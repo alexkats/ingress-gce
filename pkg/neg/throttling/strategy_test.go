@@ -2,6 +2,7 @@ package throttling
 
 import (
 	"fmt"
+	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"net/http"
 	"testing"
 	"time"
@@ -35,21 +36,21 @@ func getTcPrefix(tcDesc string) string {
 	return prefix
 }
 
-func verifyExactDelay(t *testing.T, strategy Strategy, expectedDelay time.Duration, tcDesc string) {
-	delay := strategy.GetDelay()
+func verifyExactDelay(t *testing.T, strategy cloud.ThrottlingStrategy, expectedDelay time.Duration, tcDesc string) {
+	delay := strategy.Delay()
 	if delay != expectedDelay {
 		t.Errorf("%vExpect delay = %v, but got %v", getTcPrefix(tcDesc), expectedDelay, delay)
 	}
 }
 
-func verifyIntervalDelay(t *testing.T, strategy Strategy, expectedDelayMin, expectedDelayMax time.Duration, tcDesc string) {
-	delay := strategy.GetDelay()
+func verifyIntervalDelay(t *testing.T, strategy cloud.ThrottlingStrategy, expectedDelayMin, expectedDelayMax time.Duration, tcDesc string) {
+	delay := strategy.Delay()
 	if !(delay >= expectedDelayMin && delay <= expectedDelayMax) {
 		t.Errorf("%vExpect delay >= %v and delay <= %v, but got %v", getTcPrefix(tcDesc), expectedDelayMin, expectedDelayMax, delay)
 	}
 }
 
-func verifyIncreasedDelay(t *testing.T, strategy Strategy, expectedDelayInitial time.Duration, tcDesc string) {
+func verifyIncreasedDelay(t *testing.T, strategy cloud.ThrottlingStrategy, expectedDelayInitial time.Duration, tcDesc string) {
 	expectDelayMax := expectedDelayInitial * 2
 	if expectDelayMax > testMaxDelay {
 		expectDelayMax = testMaxDelay
@@ -57,7 +58,7 @@ func verifyIncreasedDelay(t *testing.T, strategy Strategy, expectedDelayInitial 
 	verifyIntervalDelay(t, strategy, expectedDelayInitial, expectDelayMax, tcDesc)
 }
 
-func verifyDecreasedDelay(t *testing.T, strategy Strategy, expectedDelayInitial time.Duration, tcDesc string) {
+func verifyDecreasedDelay(t *testing.T, strategy cloud.ThrottlingStrategy, expectedDelayInitial time.Duration, tcDesc string) {
 	expectDelayMin := expectedDelayInitial / 2
 	if expectDelayMin < testMinDelay {
 		expectDelayMin = testMinDelay
@@ -72,19 +73,19 @@ func TestDefaultStrategy(t *testing.T) {
 	strategy := NewDefaultStrategy(testMinDelay, testMaxDelay, fakeClock, klog.TODO())
 	verifyExactDelay(t, strategy, 0, "")
 	groupErr := &googleapi.Error{Code: http.StatusTooManyRequests}
-	strategy.PushFeedback(groupErr)
+	strategy.Observe(groupErr)
 	expectedDelay := testMinDelay
 	verifyExactDelay(t, strategy, expectedDelay, "")
 
 	for expectedDelay != testMaxDelay {
-		strategy.PushFeedback(groupErr)
+		strategy.Observe(groupErr)
 		verifyIncreasedDelay(t, strategy, expectedDelay, "")
-		expectedDelay = strategy.GetDelay()
+		expectedDelay = strategy.Delay()
 	}
 
-	strategy.PushFeedback(groupErr)
+	strategy.Observe(groupErr)
 	verifyExactDelay(t, strategy, expectedDelay, "")
-	strategy.PushFeedback(nil)
+	strategy.Observe(nil)
 	verifyExactDelay(t, strategy, 0, "")
 }
 
@@ -120,7 +121,7 @@ func TestDifferentErrors(t *testing.T) {
 		},
 	} {
 		strategy.resetDelay()
-		strategy.PushFeedback(tc.feedback)
+		strategy.Observe(tc.feedback)
 		expectedDelay := time.Duration(0)
 		if tc.expectDelay {
 			expectedDelay = testMinDelay
@@ -162,7 +163,7 @@ func TestDelayWithElapsedTime(t *testing.T) {
 		},
 	} {
 		strategy.resetDelay()
-		strategy.PushFeedback(groupErr)
+		strategy.Observe(groupErr)
 		expectedDelay := testMinDelay - tc.elapsed
 		if expectedDelay < 0 {
 			expectedDelay = 0
@@ -179,19 +180,19 @@ func TestTwoWayStrategy(t *testing.T) {
 	strategy := NewTwoWayStrategy(testMinDelay, testMaxDelay, testNoRequestsTimeoutBeforeDecreasingDelay, testNoRequestsTimeoutBeforeResettingDelay, fakeClock, klog.TODO())
 	verifyExactDelay(t, strategy, 0, "")
 	groupErr := &googleapi.Error{Code: http.StatusTooManyRequests}
-	strategy.PushFeedback(groupErr)
+	strategy.Observe(groupErr)
 	expectedDelay := testMinDelay
 	verifyExactDelay(t, strategy, expectedDelay, "")
 
 	for i := 0; i < 10; i++ {
-		expectedDelay = strategy.GetDelay()
-		strategy.PushFeedback(groupErr)
+		expectedDelay = strategy.Delay()
+		strategy.Observe(groupErr)
 		verifyIncreasedDelay(t, strategy, expectedDelay, "")
 	}
 
 	for {
-		expectedDelay = strategy.GetDelay()
-		strategy.PushFeedback(nil)
+		expectedDelay = strategy.Delay()
+		strategy.Observe(nil)
 
 		if expectedDelay == testMinDelay {
 			break
@@ -213,7 +214,7 @@ func TestResetDelayAfterTimeout(t *testing.T) {
 	groupErr := &googleapi.Error{Code: http.StatusTooManyRequests}
 
 	for i := 0; i < 100; i++ {
-		strategy.PushFeedback(groupErr)
+		strategy.Observe(groupErr)
 	}
 
 	time.Sleep(1 * time.Second)
@@ -274,11 +275,11 @@ func TestDynamicTwoWayStrategy(t *testing.T) {
 		},
 	} {
 		strategy.resetDelay()
-		strategy.PushFeedback(nil)
+		strategy.Observe(nil)
 		for i, feedback := range tc.feedbacks {
-			expectedDelay := strategy.GetDelay()
+			expectedDelay := strategy.Delay()
 			expectedDeltaDelay := tc.expectedDeltaDelays[i]
-			strategy.PushFeedback(feedback)
+			strategy.Observe(feedback)
 			if expectedDeltaDelay < 0 {
 				if expectedDelay == testMinDelay || expectedDeltaDelay < -1 {
 					verifyExactDelay(t, strategy, 0, tc.desc)

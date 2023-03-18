@@ -18,6 +18,7 @@ package types
 
 import (
 	"fmt"
+	"k8s.io/ingress-gce/pkg/utils"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
@@ -44,10 +45,15 @@ const (
 
 // NewAdapter takes a Cloud and returns a NetworkEndpointGroupCloud.
 func NewAdapter(g *gce.Cloud) NetworkEndpointGroupCloud {
+	return NewStrategyAdapter(g, false)
+}
+
+func NewStrategyAdapter(g *gce.Cloud, strategy bool) NetworkEndpointGroupCloud {
 	return &cloudProviderAdapter{
 		c:             g,
 		networkURL:    g.NetworkURL(),
 		subnetworkURL: g.SubnetworkURL(),
+		strategy:      strategy,
 	}
 }
 
@@ -56,6 +62,7 @@ func NewAdapterWithNetwork(g *gce.Cloud, network, subnetwork string) NetworkEndp
 		c:             g,
 		networkURL:    network,
 		subnetworkURL: subnetwork,
+		strategy:      false,
 	}
 }
 
@@ -65,6 +72,7 @@ type cloudProviderAdapter struct {
 	c             *gce.Cloud
 	networkURL    string
 	subnetworkURL string
+	strategy      bool
 }
 
 // GetNetworkEndpointGroup implements NetworkEndpointGroupCloud.
@@ -97,13 +105,21 @@ func (a *cloudProviderAdapter) DeleteNetworkEndpointGroup(name string, zone stri
 // AttachNetworkEndpoints implements NetworkEndpointGroupCloud.
 func (a cloudProviderAdapter) AttachNetworkEndpoints(name, zone string, endpoints []*composite.NetworkEndpoint, version meta.Version) error {
 	req := &composite.NetworkEndpointGroupsAttachEndpointsRequest{NetworkEndpoints: endpoints}
-	return composite.AttachNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	err := composite.AttachNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	if err != nil && a.strategy && utils.IsQuotaExceededError(err) {
+		err = fmt.Errorf("%w: %w", ErrQuotaExceededWithStrategy, err)
+	}
+	return err
 }
 
 // DetachNetworkEndpoints implements NetworkEndpointGroupCloud.
 func (a *cloudProviderAdapter) DetachNetworkEndpoints(name, zone string, endpoints []*composite.NetworkEndpoint, version meta.Version) error {
 	req := &composite.NetworkEndpointGroupsDetachEndpointsRequest{NetworkEndpoints: endpoints}
-	return composite.DetachNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	err := composite.DetachNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	if err != nil && a.strategy && utils.IsQuotaExceededError(err) {
+		err = fmt.Errorf("%w: %w", ErrQuotaExceededWithStrategy, err)
+	}
+	return err
 }
 
 // ListNetworkEndpoints implements NetworkEndpointGroupCloud.
@@ -113,7 +129,11 @@ func (a *cloudProviderAdapter) ListNetworkEndpoints(name, zone string, showHealt
 		healthStatus = "SHOW"
 	}
 	req := &composite.NetworkEndpointGroupsListEndpointsRequest{HealthStatus: healthStatus}
-	return composite.ListNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	res, err := composite.ListNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
+	if err != nil && a.strategy && utils.IsQuotaExceededError(err) {
+		err = fmt.Errorf("%w: %w", ErrQuotaExceededWithStrategy, err)
+	}
+	return res, err
 }
 
 // NetworkURL implements NetworkEndpointGroupCloud.

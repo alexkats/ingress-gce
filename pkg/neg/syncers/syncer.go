@@ -82,40 +82,56 @@ func (s *syncer) Start() error {
 		return fmt.Errorf("NEG syncer for %s is shutting down. ", s.NegSyncerKey.String())
 	}
 
-	s.logger.V(2).Info("Starting NEG syncer for service port", "negSyncerKey", s.NegSyncerKey.String())
+	s.logger.V(2).Info("alexkats: main: Syncer: Starting NEG syncer for service port", "negSyncerKey", s.NegSyncerKey.String())
 	s.init()
 	go func() {
 		for {
+			s.logger.V(3).Info("alexkats: main: Syncer: Going to sync", "negSyncerKey", s.NegSyncerKey.String())
 			// equivalent to never retry
 			retryCh := make(<-chan time.Time)
 			err := s.core.sync()
+			s.logger.V(3).Info("alexkats: main: Syncer: Sync invocation finished", "negSyncerKey", s.NegSyncerKey.String(), "err", err)
 			if err != nil {
-				delay, retryErr := s.backoff.NextDelay()
+				delay, retryErr := time.Duration(0), error(nil)
+				if syncErr := negtypes.ClassifyError(err); syncErr.Reason != negtypes.ReasonQuotaExceededWithStrategy {
+					s.logger.Error(err, "alexkats: main: Syncer: NOT Quota exceeded error")
+					delay, retryErr = s.backoff.NextDelay()
+				}
+				s.logger.V(3).Info("alexkats: main: Syncer: Start 1", "negSyncerKey", s.NegSyncerKey.String())
 				retryMsg := ""
 				if retryErr == backoff.ErrRetriesExceeded {
 					retryMsg = "(will not retry)"
+					s.logger.V(3).Info("alexkats: main: Syncer: Start 2.1", "negSyncerKey", s.NegSyncerKey.String())
 				} else {
 					retryCh = s.clock.After(delay)
 					retryMsg = "(will retry)"
+					s.logger.V(3).Info("alexkats: main: Syncer: Start 2.2", "negSyncerKey", s.NegSyncerKey.String())
 				}
 
+				s.logger.V(3).Info("alexkats: main: Syncer: Start 3", "negSyncerKey", s.NegSyncerKey.String())
 				if svc := getService(s.serviceLister, s.Namespace, s.Name); svc != nil {
+					s.logger.V(3).Info(fmt.Sprintf("alexkats: main: Syncer: Failed to sync NEG %q with delay %q %s: %v", s.NegSyncerKey.NegName, delay, retryMsg, err))
 					s.recorder.Eventf(svc, apiv1.EventTypeWarning, "SyncNetworkEndpointGroupFailed", "Failed to sync NEG %q %s: %v", s.NegSyncerKey.NegName, retryMsg, err)
 				}
+				s.logger.V(3).Info("alexkats: main: Syncer: Start 4", "negSyncerKey", s.NegSyncerKey.String())
 			} else {
+				s.logger.V(3).Info("alexkats: main: Syncer: Start 1.2", "negSyncerKey", s.NegSyncerKey.String())
 				s.backoff.ResetDelay()
 			}
 
 			select {
 			case _, open := <-s.syncCh:
+				s.logger.V(3).Info("alexkats: main: Syncer: Got syncCh", "negSyncerKey", s.NegSyncerKey.String())
 				if !open {
+					s.logger.V(3).Info("alexkats: main: Syncer: Going to stop NEG syncer", "negSyncerKey", s.NegSyncerKey.String())
 					s.stateLock.Lock()
 					s.shuttingDown = false
 					s.stateLock.Unlock()
-					s.logger.V(2).Info("Stopping NEG syncer", "negSyncerKey", s.NegSyncerKey.String())
+					s.logger.V(2).Info("alexkats: main: Syncer: Stopped NEG syncer", "negSyncerKey", s.NegSyncerKey.String())
 					return
 				}
 			case <-retryCh:
+				s.logger.V(3).Info("alexkats: main: Syncer: Triggerred retryCh", "negSyncerKey", s.NegSyncerKey.String())
 				// continue to sync
 			}
 		}
@@ -134,7 +150,7 @@ func (s *syncer) Stop() {
 	s.stateLock.Lock()
 	defer s.stateLock.Unlock()
 	if !s.stopped {
-		s.logger.V(2).Info("Stopping NEG syncer for service port", "negSyncerKey", s.NegSyncerKey.String())
+		s.logger.V(2).Info("alexkats: main: Syncer: Stopping NEG syncer for service port", "negSyncerKey", s.NegSyncerKey.String())
 		s.stopped = true
 		s.shuttingDown = true
 		close(s.syncCh)
@@ -143,13 +159,15 @@ func (s *syncer) Stop() {
 
 func (s *syncer) Sync() bool {
 	if s.IsStopped() {
-		s.logger.Info("NEG syncer is already stopped.", "negSyncerKey", s.NegSyncerKey.String())
+		s.logger.Info("alexkats: main: Syncer: NEG syncer is already stopped.", "negSyncerKey", s.NegSyncerKey.String())
 		return false
 	}
 	select {
 	case s.syncCh <- struct{}{}:
+		s.logger.Info("alexkats: main: Syncer: Sent to syncCh", "negSyncerKey", s.NegSyncerKey.String())
 		return true
 	default:
+		s.logger.Info("alexkats: main: Syncer: DID NOT Send to syncCh", "negSyncerKey", s.NegSyncerKey.String())
 		return false
 	}
 }

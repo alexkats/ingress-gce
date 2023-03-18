@@ -21,20 +21,25 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/ingress-gce/pkg/flags"
+	"k8s.io/ingress-gce/pkg/neg/throttling"
 	"k8s.io/ingress-gce/pkg/ratelimit/metrics"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 // GCERateLimiter implements cloud.RateLimiter
 type GCERateLimiter struct {
 	// Map a RateLimitKey to its rate limiter implementation.
 	rateLimitImpls map[cloud.RateLimitKey]flowcontrol.RateLimiter
+	strategies     map[cloud.RateLimitKey]cloud.ThrottlingStrategy
+	strategyLocks  map[cloud.RateLimitKey]*sync.Mutex
 	// Minimum polling interval for getting operations. Underlying operations rate limiter
 	// may increase the time.
 	operationPollInterval time.Duration
@@ -49,6 +54,8 @@ func init() {
 // Expected format of specs: {"[version].[service].[operation],[type],[param1],[param2],..", "..."}
 func NewGCERateLimiter(specs []string, operationPollInterval time.Duration) (*GCERateLimiter, error) {
 	rateLimitImpls := make(map[cloud.RateLimitKey]flowcontrol.RateLimiter)
+	strategies := make(map[cloud.RateLimitKey]cloud.ThrottlingStrategy)
+	strategyLocks := make(map[cloud.RateLimitKey]*sync.Mutex)
 	// Within each specification, split on comma to get the operation,
 	// rate limiter type, and extra parameters.
 	for _, spec := range specs {
@@ -62,18 +69,29 @@ func NewGCERateLimiter(specs []string, operationPollInterval time.Duration) (*GC
 			return nil, err
 		}
 		// params[1:] should consist of the rate limiter type and extra params.
-		impl, err := constructRateLimitImpl(params[0], params[1:])
-		if err != nil {
-			return nil, err
+		if params[1] == "strategy" {
+			impl, err := constructStrategy(params[2:])
+			if err != nil {
+				return nil, err
+			}
+			strategies[key] = impl
+			strategyLocks[key] = &sync.Mutex{}
+		} else {
+			impl, err := constructRateLimitImpl(params[0], params[1:])
+			if err != nil {
+				return nil, err
+			}
+			rateLimitImpls[key] = impl
 		}
-		rateLimitImpls[key] = impl
 		klog.Infof("Configured rate limiting for: %v, scale = %f", key, flags.F.GCERateLimitScale)
 	}
-	if len(rateLimitImpls) == 0 {
+	if len(rateLimitImpls) == 0 && len(strategies) == 0 {
 		return nil, nil
 	}
 	return &GCERateLimiter{
 		rateLimitImpls:        rateLimitImpls,
+		strategies:            strategies,
+		strategyLocks:         strategyLocks,
 		operationPollInterval: operationPollInterval,
 	}, nil
 }
@@ -82,8 +100,25 @@ func NewGCERateLimiter(specs []string, operationPollInterval time.Duration) (*GC
 func (grl *GCERateLimiter) Accept(ctx context.Context, key *cloud.RateLimitKey) error {
 	var rl cloud.RateLimiter
 
-	impl := grl.rateLimitImpl(key)
-	if impl != nil {
+	if impl, sLock := grl.strategyAndLock(key); impl != nil {
+		usedDelay := time.Duration(0)
+		lockLatency := time.Duration(0)
+		delayObserver := func(delay time.Duration) {
+			usedDelay = delay
+		}
+		lockLatencyObserver := func(d time.Duration) {
+			lockLatency = d
+		}
+		rl = cloud.NewStrategyRateLimiter(impl, delayObserver, lockLatencyObserver, sLock)
+		start := time.Now()
+		err := rl.Accept(ctx, key)
+		metrics.PublishStrategyRateLimiterMetrics(fmt.Sprintf("%s.%s.%s", key.Version, key.Service, key.Operation), start, usedDelay, lockLatency)
+		if err != nil {
+			return err
+		}
+	}
+
+	if impl := grl.rateLimitImpl(key); impl != nil {
 		// Wrap the flowcontrol.RateLimiter with a AcceptRateLimiter and handle context.
 		rl = &cloud.AcceptRateLimiter{Acceptor: impl}
 	} else {
@@ -110,8 +145,13 @@ func (grl *GCERateLimiter) Accept(ctx context.Context, key *cloud.RateLimitKey) 
 	return err
 }
 
-// Observe is a no-op func to satisfy cloud.RateLimiter
-func (grl *GCERateLimiter) Observe(context.Context, error, *cloud.RateLimitKey) {}
+func (grl *GCERateLimiter) Observe(ctx context.Context, err error, key *cloud.RateLimitKey) {
+	metrics.PublishQuotaExceededRateLimiterMetrics(fmt.Sprintf("%s.%s.%s", key.Version, key.Service, key.Operation), err)
+	if impl, sLock := grl.strategyAndLock(key); impl != nil {
+		rl := cloud.NewStrategyRateLimiter(impl, func(d time.Duration) {}, func(d time.Duration) {}, sLock)
+		rl.Observe(ctx, err, key)
+	}
+}
 
 // rateLimitImpl returns the flowcontrol.RateLimiter implementation
 // associated with the passed in key.
@@ -126,6 +166,16 @@ func (grl *GCERateLimiter) rateLimitImpl(key *cloud.RateLimitKey) flowcontrol.Ra
 		Service:   key.Service,
 	}
 	return grl.rateLimitImpls[keyCopy]
+}
+
+func (grl *GCERateLimiter) strategyAndLock(key *cloud.RateLimitKey) (cloud.ThrottlingStrategy, *sync.Mutex) {
+	keyCopy := cloud.RateLimitKey{
+		ProjectID: "",
+		Operation: key.Operation,
+		Version:   key.Version,
+		Service:   key.Service,
+	}
+	return grl.strategies[keyCopy], grl.strategyLocks[keyCopy]
 }
 
 // Expected format of param is [version].[service].[operation]
@@ -180,4 +230,23 @@ func constructRateLimitImpl(key string, params []string) (flowcontrol.RateLimite
 		return tokenBucket, nil
 	}
 	return nil, fmt.Errorf("invalid rate limiter type provided: %v", rlType)
+}
+
+func constructStrategy(params []string) (cloud.ThrottlingStrategy, error) {
+	strategyType := params[0]
+	//implArgs := params[1:]
+	if strategyType == "dynamic" {
+		return throttling.NewDynamicTwoWayStrategy(
+			10*time.Millisecond,
+			5*time.Second,
+			5,
+			2,
+			5,
+			3*time.Second,
+			30*time.Second,
+			clock.RealClock{},
+			klog.TODO(),
+		), nil
+	}
+	return nil, fmt.Errorf("invalid strategy type provided: %v", strategyType)
 }

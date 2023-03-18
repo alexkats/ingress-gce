@@ -172,7 +172,7 @@ func ensureNetworkEndpointGroup(svcNamespace, svcName, negName, zone, negService
 	}
 
 	if needToCreate {
-		klog.V(2).Infof("Creating NEG %q for %s in %q.", negName, negServicePortName, zone)
+		klog.V(2).Infof("alexkats: main: SyncerUtils: Creating NEG %q for %s in %q.", negName, negServicePortName, zone)
 		var subnetwork string
 		switch networkEndpointType {
 		case negtypes.NonGCPPrivateEndpointType:
@@ -212,7 +212,7 @@ func ensureNetworkEndpointGroup(svcNamespace, svcName, negName, zone, negService
 		var err error
 		neg, err = cloud.GetNetworkEndpointGroup(negName, zone, version)
 		if err != nil {
-			klog.Errorf("Error while retrieving %q in zone %q: %v after initialization", negName, zone, err)
+			klog.Errorf("alexkats: main: SyncerUtils: Error while retrieving %q in zone %q: %v after initialization", negName, zone, err)
 			return negRef, err
 		}
 	}
@@ -641,32 +641,42 @@ func podBelongsToService(pod *apiv1.Pod, service *apiv1.Service) error {
 func retrieveExistingZoneNetworkEndpointMap(negName string, zoneGetter negtypes.ZoneGetter, cloud negtypes.NetworkEndpointGroupCloud, version meta.Version, mode negtypes.EndpointsCalculatorMode, enableDualStackNEG bool) (map[string]negtypes.NetworkEndpointSet, labels.EndpointPodLabelMap, error) {
 	// Include zones that have non-candidate nodes currently. It is possible that NEGs were created in those zones previously and the endpoints now became non-candidates.
 	// Endpoints in those NEGs now need to be removed. This mostly applies to VM_IP_NEGs where the endpoints are nodes.
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap start", "neg", negName)
 	zones, err := zoneGetter.ListZones(utils.AllNodesPredicate)
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 1", "neg", negName)
 	if err != nil {
 		return nil, nil, err
 	}
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 2", "neg", negName)
 
 	candidateNodeZones, err := zoneGetter.ListZones(negtypes.NodePredicateForEndpointCalculatorMode(mode))
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 3", "neg", negName)
 	if err != nil {
 		return nil, nil, err
 	}
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 4", "neg", negName)
 	candidateZonesMap := sets.NewString(candidateNodeZones...)
 
 	zoneNetworkEndpointMap := map[string]negtypes.NetworkEndpointSet{}
 	endpointPodLabelMap := labels.EndpointPodLabelMap{}
 	for _, zone := range zones {
+		klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 5 (loop)", "neg", negName, "zone", zone)
 		networkEndpointsWithHealthStatus, err := cloud.ListNetworkEndpoints(negName, zone, false, version)
+		klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 6 (loop)", "neg", negName, "zone", zone, "err", err)
 		if err != nil {
 			// It is possible for a NEG to be missing in a zone without candidate nodes. Log and ignore this error.
 			// NEG not found in a candidate zone is an error.
 			if utils.IsNotFoundError(err) && !candidateZonesMap.Has(zone) {
-				klog.Infof("Ignoring NotFound error for NEG %q in zone %q", negName, zone)
+				klog.Infof("alexkats: main: SyncerUtils: Ignoring NotFound error for NEG %q in zone %q", negName, zone)
 				continue
 			}
-			return nil, nil, fmt.Errorf("Failed to lookup NEG in zone %q, candidate zones %v, err - %v", zone, candidateZonesMap, err)
+			return nil, nil, fmt.Errorf("Failed to lookup NEG in zone %q, candidate zones %v, err - %w", zone, candidateZonesMap, err)
 		}
+		klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 7 (loop)", "neg", negName, "zone", zone)
 		zoneNetworkEndpointMap[zone] = negtypes.NewNetworkEndpointSet()
+		klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 8 (loop)", "neg", negName, "zone", zone)
 		for _, ne := range networkEndpointsWithHealthStatus {
+			klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 9 (loop/loop)", "neg", negName, "zone", zone, "ne", ne)
 			newNE := negtypes.NetworkEndpoint{IP: ne.NetworkEndpoint.IpAddress, Node: ne.NetworkEndpoint.Instance}
 			if ne.NetworkEndpoint.Port != 0 {
 				newNE.Port = strconv.FormatInt(ne.NetworkEndpoint.Port, 10)
@@ -675,9 +685,11 @@ func retrieveExistingZoneNetworkEndpointMap(negName string, zoneGetter negtypes.
 				newNE.IPv6 = ne.NetworkEndpoint.Ipv6Address
 			}
 			zoneNetworkEndpointMap[zone].Insert(newNE)
+			klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 10 (loop/loop)", "neg", negName, "zone", zone, "ne", ne)
 			endpointPodLabelMap[newNE] = ne.NetworkEndpoint.Annotations
 		}
 	}
+	klog.V(3).Infof("alexkats: main: SyncerUtils: retrieveExistingZoneNetworkEndpointMap 11", "neg", negName)
 	return zoneNetworkEndpointMap, endpointPodLabelMap, nil
 }
 

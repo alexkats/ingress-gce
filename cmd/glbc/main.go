@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"k8s.io/ingress-gce/pkg/utils/slice"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	flag "github.com/spf13/pflag"
@@ -348,7 +350,11 @@ func runControllers(ctx *ingctx.ControllerContext) {
 	}
 
 	logger := klog.TODO() // TODO(#1761): Replace this with a top level logger configuration once one is available.
-	cloud := negtypes.NewAdapter(ctx.Cloud)
+	strategy := slice.Contains(flags.F.GCERateLimit.Values(), "strategy", func(elem string) string {
+		return strings.Split(elem, ",")[1]
+	})
+	klog.V(3).Infof("alexkats: main: Main: strategy is %v", strategy)
+	cloud := negtypes.NewStrategyAdapter(ctx.Cloud, strategy)
 	// TODO: Refactor NEG to use cloud mocks so ctx.Cloud can be referenced within NewController.
 	negController := neg.NewController(
 		ctx.KubeClient,

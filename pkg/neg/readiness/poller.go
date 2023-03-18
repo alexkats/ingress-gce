@@ -25,7 +25,6 @@ import (
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/ingress-gce/pkg/composite"
@@ -110,6 +109,7 @@ func NewPoller(podLister cache.Indexer, lookup NegLookup, patcher podStatusPatch
 
 // RegisterNegEndpoints registered the endpoints that needed to be poll for the NEG with lock
 func (p *poller) RegisterNegEndpoints(key negMeta, endpointMap negtypes.EndpointPodMap) {
+	p.logger.V(3).Info("alexkats: main: Poller: RegisterNegEndpoints before lock")
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.registerNegEndpoints(key, endpointMap)
@@ -119,6 +119,7 @@ func (p *poller) RegisterNegEndpoints(key negMeta, endpointMap negtypes.Endpoint
 // It returns false if there is no endpoints needed to be polled, returns true if otherwise.
 // Assumes p.lock is held when calling this method.
 func (p *poller) registerNegEndpoints(key negMeta, endpointMap negtypes.EndpointPodMap) bool {
+	p.logger.V(3).Info("alexkats: main: Poller: registerNegEndpoints start")
 	endpointsToPoll := needToPoll(key.SyncerKey, endpointMap, p.lookup, p.podLister)
 	if len(endpointsToPoll) == 0 {
 		delete(p.pollMap, key)
@@ -135,8 +136,10 @@ func (p *poller) registerNegEndpoints(key negMeta, endpointMap negtypes.Endpoint
 
 // ScanForWork returns the list of NEGs that should be polled
 func (p *poller) ScanForWork() []negMeta {
+	p.logger.V(3).Info("alexkats: main: Poller: ScanForWork before lock")
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	p.logger.V(3).Info("alexkats: main: Poller: ScanForWork after lock")
 	var ret []negMeta
 	for key, target := range p.pollMap {
 		if target.polling {
@@ -146,6 +149,7 @@ func (p *poller) ScanForWork() []negMeta {
 			ret = append(ret, key)
 		}
 	}
+	p.logger.V(3).Info("alexkats: main: Poller: ScanForWork result", "result", ret)
 	return ret
 }
 
@@ -153,13 +157,25 @@ func (p *poller) ScanForWork() []negMeta {
 // This function is threadsafe.
 func (p *poller) Poll(key negMeta) (retry bool, err error) {
 	if !p.markPolling(key) {
-		p.logger.V(4).Info("NEG is already being polled or no longer needed to be polled.", "neg", key.Name, "negZone", key.Zone)
+		p.logger.V(4).Info("alexkats: main: Poller: NEG is already being polled or no longer needed to be polled.", "neg", key.Name, "negZone", key.Zone)
 		return true, nil
 	}
 	defer p.unMarkPolling(key)
 
-	p.logger.V(2).Info("polling NEG", "neg", key.Name, "negZone", key.Zone)
+	p.logger.V(2).Info("alexkats: main: Poller: polling NEG", "neg", key.Name, "negZone", key.Zone)
 	// TODO(freehan): filter the NEs that are in interest once the API supports it
+	wg := &sync.WaitGroup{}
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(iter int) {
+			_, err := p.negCloud.ListNetworkEndpoints(key.Name, key.Zone, true, key.SyncerKey.GetAPIVersion())
+			if err != nil {
+				p.logger.Error(err, "alexkats: main: Poller: Failed to ListNetworkEndpoint in NEG inside my iterations", "neg", key.String(), "iteration", iter)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
 	res, err := p.negCloud.ListNetworkEndpoints(key.Name, key.Zone /*showHealthStatus*/, true, key.SyncerKey.GetAPIVersion())
 	if err != nil {
 		// On receiving GCE API error, do not retry immediately. This is to prevent the reflector to overwhelm the GCE NEG API when
@@ -168,13 +184,18 @@ func (p *poller) Poll(key negMeta) (retry bool, err error) {
 		// until the next status poll is executed. However, the pods are not marked as Ready and still passes the LB health check will
 		// serve LB traffic. The side effect during the delay period is the workload (depending on rollout strategy) might slow down rollout.
 		// TODO(freehan): enable exponential backoff.
-		p.logger.Error(err, "Failed to ListNetworkEndpoint in NEG. Retrying after some time.", "neg", key.String(), "retryDelay", retryDelay.String())
-		<-p.clock.After(retryDelay)
+		if syncErr := negtypes.ClassifyError(err); syncErr.Reason == negtypes.ReasonQuotaExceededWithStrategy {
+			p.logger.V(3).Info("alexkats: main: Poller: Failed to ListNetworkEndpoint in NEG with quota for strategy", "neg", key.String(), "err", err)
+		} else {
+			p.logger.Error(err, "alexkats: main: Poller: Failed to ListNetworkEndpoint in NEG. Retrying after some time.", "neg", key.String(), "retryDelay", retryDelay.String())
+			<-p.clock.After(retryDelay)
+		}
 		return true, err
 	}
 
 	retry, err = p.processHealthStatus(key, res)
 	if retry {
+		p.logger.V(3).Info("alexkats: main: Poller: HC is going to be delayed and retried")
 		<-p.clock.After(hcRetryDelay)
 	}
 	return
@@ -194,7 +215,7 @@ func (p *poller) Poll(key negMeta) (retry bool, err error) {
 func (p *poller) processHealthStatus(key negMeta, healthStatuses []*composite.NetworkEndpointWithHealthStatus) (bool, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	p.logger.V(4).Info("Executing processHealthStatus", "neg", key.String(), "healthStatuses", healthStatuses)
+	p.logger.V(4).Info("alexkats: main: Poller: Executing processHealthStatus", "neg", key.String(), "healthStatuses", healthStatuses)
 
 	var (
 		errList []error

@@ -168,7 +168,7 @@ func (r *readinessReflector) syncPod(podKey string, neg, backendService *meta.Ke
 		return nil
 	}
 
-	r.logger.V(3).Info("Syncing pod", "pod", podKey, "neg", neg, "backendService", backendService)
+	r.logger.V(3).Info("alexkats: main: Reflector: Syncing pod", "pod", podKey, "neg", neg, "backendService", backendService)
 	expectedCondition := r.getExpectedNegCondition(pod, neg, backendService)
 	return r.ensurePodNegCondition(pod, expectedCondition)
 }
@@ -236,6 +236,7 @@ func (r *readinessReflector) SyncPod(pod *v1.Pod) {
 
 // CommitPods registers the current network endpoints in a NEG and starts polling them if needed
 func (r *readinessReflector) CommitPods(syncerKey negtypes.NegSyncerKey, negName string, zone string, endpointMap negtypes.EndpointPodMap) {
+	r.logger.V(3).Info("alexkats: main: Reflector: CommitPods", "syncerKey", syncerKey, "negName", negName, "endpointMap", endpointMap)
 	key := negMeta{
 		SyncerKey: syncerKey,
 		Name:      negName,
@@ -247,6 +248,7 @@ func (r *readinessReflector) CommitPods(syncerKey negtypes.NegSyncerKey, negName
 
 // poll spins off go routines to poll NEGs
 func (r *readinessReflector) poll() {
+	r.logger.V(3).Info("alexkats: main: Reflector: poll")
 	r.pollerLock.Lock()
 	defer r.pollerLock.Unlock()
 	for _, key := range r.poller.ScanForWork() {
@@ -256,12 +258,13 @@ func (r *readinessReflector) poll() {
 
 // pollNeg polls a NEG
 func (r *readinessReflector) pollNeg(key negMeta) {
-	r.logger.V(3).Info("Polling NEG", "neg", key.String())
+	r.logger.V(3).Info("alexkats: main: Reflector: Polling NEG", "neg", key.String())
 	retry, err := r.poller.Poll(key)
 	if err != nil {
-		r.logger.Error(err, "Failed to poll neg", "neg", key)
+		r.logger.Error(err, "alexkats: main: Reflector: Failed to poll neg", "neg", key)
 	}
 	if retry {
+		r.logger.V(3).Info("alexkats: main: Reflector: Retrying to poll NEG from pollNeg", "neg", key)
 		r.poll()
 	}
 }
@@ -275,9 +278,10 @@ func (r *readinessReflector) ensurePodNegCondition(pod *v1.Pod, expectedConditio
 	// check if it is necessary to patch
 	condition, ok := NegReadinessConditionStatus(pod)
 	if ok && reflect.DeepEqual(expectedCondition, condition) {
-		r.logger.V(3).Info("NEG condition for pod is expected, skip patching", "pod", klog.KRef(pod.Namespace, pod.Name))
+		r.logger.V(3).Info("alexkats: main: Reflector: NEG condition for pod is expected, skip patching", "pod", klog.KRef(pod.Namespace, pod.Name), "condition", condition)
 		return nil
 	}
+	r.logger.V(3).Info("alexkats: main: Reflector: Patching pod", "pod", klog.KRef(pod.Namespace, pod.Name), "condition", condition, "expectedCondition", expectedCondition)
 
 	// calculate patch bytes, send patch and record event
 	oldStatus := pod.Status.DeepCopy()

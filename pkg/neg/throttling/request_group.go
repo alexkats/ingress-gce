@@ -2,6 +2,7 @@ package throttling
 
 import (
 	"fmt"
+	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,15 +37,48 @@ type NoResponse = any
 
 type defaultRequestGroup[R any] struct {
 	lock       sync.Mutex
-	strategies map[meta.Version]Strategy
+	strategies map[meta.Version]cloud.ThrottlingStrategy
 	clock      clock.Clock
 	logger     klog.Logger
+}
+
+type MyAcceptor struct {
+	lock     sync.Mutex
+	strategy cloud.ThrottlingStrategy
+	clock    clock.Clock
+}
+
+func NewDefaultMyAcceptor(strategy cloud.ThrottlingStrategy) *MyAcceptor {
+	return &MyAcceptor{
+		strategy: strategy,
+		clock:    clock.RealClock{},
+	}
+}
+
+func (a *MyAcceptor) Accept() {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	delay := a.strategy.Delay()
+	if delay != 0 {
+		<-a.clock.After(delay)
+	}
+	/*
+		if out != nil {
+			go func() {
+				a.strategy.Observe(<-out)
+			}()
+		}
+	*/
+}
+
+func (a *MyAcceptor) PushFeedback(err error) {
+	a.strategy.Observe(err)
 }
 
 func NewDefaultRequestGroup[R any](minDelay, maxDelay time.Duration, logger klog.Logger) RequestGroup[R] {
 	clock := clock.RealClock{}
 	logger = logger.WithName("DefaultRequestGroup")
-	strategies := make(map[meta.Version]Strategy)
+	strategies := make(map[meta.Version]cloud.ThrottlingStrategy)
 	for _, version := range meta.AllVersions {
 		strategy := NewDynamicTwoWayStrategy(
 			minDelay,
@@ -67,10 +101,10 @@ func NewDefaultRequestGroup[R any](minDelay, maxDelay time.Duration, logger klog
 	}
 }
 
-func (g *defaultRequestGroup[R]) delayIfNeeded(strategy Strategy) {
+func (g *defaultRequestGroup[R]) delayIfNeeded(strategy cloud.ThrottlingStrategy) {
 	g.lock.Lock()
 	defer g.lock.Unlock()
-	delay := strategy.GetDelay()
+	delay := strategy.Delay()
 	if delay != 0 {
 		<-g.clock.After(delay)
 	}
@@ -80,7 +114,7 @@ func (g *defaultRequestGroup[R]) Run(f func() (R, error), version meta.Version) 
 	strategy := g.strategies[version]
 	g.delayIfNeeded(strategy)
 	res, err := f()
-	strategy.PushFeedback(err)
+	strategy.Observe(err)
 	return res, err
 }
 

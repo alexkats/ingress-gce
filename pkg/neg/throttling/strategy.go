@@ -24,13 +24,13 @@ const (
 	creationErrMsg = "Failed to use provided parameters for the throttling strategy, fallback to default ones"
 )
 
-// Strategy handles delays based on feedbacks provided.
-type Strategy interface {
-	// GetDelay returns the delay for next request.
-	GetDelay() time.Duration
-	// PushFeedback recalculates the next delay based on the feedback.
-	PushFeedback(err error)
-}
+//Strategy handles delays based on feedbacks provided.
+//type Strategy interface {
+//	Delay returns the delay for next request.
+//	Delay() time.Duration
+//	Observe recalculates the next delay based on the feedback.
+//Observe(err error)
+//}
 
 // defaultStrategy is backed by generic exponential types.BackoffHandler.
 // For each group error the delay is increased, otherwise it's reset.
@@ -99,8 +99,8 @@ func (strategy *defaultStrategy) decreaseDelay() {
 	strategy.currentDelay = strategy.backoff.DecreaseDelay()
 }
 
-// GetDelay returns the delay for next request, taking into account the last request timestamp.
-func (strategy *defaultStrategy) GetDelay() time.Duration {
+// Delay returns the delay for next request, taking into account the last request timestamp.
+func (strategy *defaultStrategy) Delay() time.Duration {
 	strategy.lock.Lock()
 	defer strategy.lock.Unlock()
 	elapsed := strategy.clock.Now().Sub(strategy.lastRequestTimestamp)
@@ -111,7 +111,7 @@ func (strategy *defaultStrategy) GetDelay() time.Duration {
 	return delay
 }
 
-func (strategy *defaultStrategy) PushFeedback(err error) {
+func (strategy *defaultStrategy) Observe(err error) {
 	strategy.lock.Lock()
 	defer strategy.lock.Unlock()
 	strategy.lastRequestTimestamp = strategy.clock.Now()
@@ -179,9 +179,9 @@ func (strategy *twoWayStrategy) decreaseOrResetDelayAfterTimeout() {
 	strategy.clockCtx, strategy.clockCancelCtx = context.WithCancel(context.Background())
 	decreaseDelayTimeout := strategy.noRequestsTimeoutBeforeDecreasingDelay
 	resetDelayTimeout := strategy.noRequestsTimeoutBeforeResettingDelayAfterDecreasingDelay
-	if strategy.currentDelay*3/2 > decreaseDelayTimeout {
-		decreaseDelayTimeout = strategy.currentDelay * 3 / 2
-	}
+	//if strategy.currentDelay*3/2 > decreaseDelayTimeout {
+	//	decreaseDelayTimeout = strategy.currentDelay * 3 / 2
+	//}
 	if strategy.currentDelay*3 > (decreaseDelayTimeout + resetDelayTimeout) {
 		resetDelayTimeout = strategy.currentDelay*3 - decreaseDelayTimeout
 	}
@@ -206,29 +206,29 @@ func (strategy *twoWayStrategy) wait(d time.Duration, f func()) bool {
 	}
 }
 
-func (strategy *twoWayStrategy) preProcessFeedback() {
+func (strategy *twoWayStrategy) preObserve() {
 	strategy.lastRequestTimestamp = strategy.clock.Now()
 	if strategy.clockCancelCtx != nil {
 		strategy.clockCancelCtx()
 	}
 }
 
-func (strategy *twoWayStrategy) postProcessFeedback() {
+func (strategy *twoWayStrategy) postObserve() {
 	if strategy.delayed {
 		strategy.decreaseOrResetDelayAfterTimeout()
 	}
 }
 
-func (strategy *twoWayStrategy) PushFeedback(err error) {
+func (strategy *twoWayStrategy) Observe(err error) {
 	strategy.lock.Lock()
 	defer strategy.lock.Unlock()
-	strategy.preProcessFeedback()
+	strategy.preObserve()
 	if utils.IsQuotaExceededError(err) {
 		strategy.increaseDelay()
 	} else {
 		strategy.decreaseDelay()
 	}
-	strategy.postProcessFeedback()
+	strategy.postObserve()
 }
 
 // dynamicTwoWayStrategy is backed by exponential types.TwoWayBackoffHandler.
@@ -275,10 +275,10 @@ func NewDynamicTwoWayStrategy(
 	}
 }
 
-func (strategy *dynamicTwoWayStrategy) PushFeedback(err error) {
+func (strategy *dynamicTwoWayStrategy) Observe(err error) {
 	strategy.lock.Lock()
 	defer strategy.lock.Unlock()
-	strategy.preProcessFeedback()
+	strategy.preObserve()
 	if utils.IsQuotaExceededError(err) {
 		strategy.errorsCount++
 		strategy.successesCount = 0
@@ -304,5 +304,5 @@ func (strategy *dynamicTwoWayStrategy) PushFeedback(err error) {
 			}
 		}
 	}
-	strategy.postProcessFeedback()
+	strategy.postObserve()
 }

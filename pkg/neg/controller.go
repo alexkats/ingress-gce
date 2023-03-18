@@ -387,7 +387,9 @@ func (c *Controller) processNode() {
 	defer func() {
 		now := c.nodeSyncTracker.Track()
 		metrics.LastSyncTimestamp.Set(float64(now.UTC().UnixNano()))
+		c.logger.V(3).Info("alexkats: main: Controller: Finished processing node")
 	}()
+	c.logger.V(3).Info("alexkats: main: Controller: Processing node")
 	c.manager.SyncNodes()
 }
 
@@ -396,8 +398,10 @@ func (c *Controller) processEndpoint(key string) {
 	defer func() {
 		now := c.syncTracker.Track()
 		metrics.LastSyncTimestamp.Set(float64(now.UTC().UnixNano()))
+		c.logger.V(3).Info("alexkats: main: Controller: Finished processing endpoint", "endpoint", key)
 	}()
 
+	c.logger.V(3).Info("alexkats: main: Controller: Processing endpoint", "endpoint", key)
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		c.logger.Error(err, "Failed to split endpoint namespaced key", "key", key)
@@ -422,11 +426,11 @@ func (c *Controller) serviceWorker() {
 
 // processService takes a service and determines whether it needs NEGs or not.
 func (c *Controller) processService(key string) error {
-	c.logger.V(3).Info("Processing service", "service", key)
+	c.logger.V(3).Info("alexkats: main: Controller: Processing service", "service", key)
 	defer func() {
 		now := c.syncTracker.Track()
 		metrics.LastSyncTimestamp.Set(float64(now.UTC().UnixNano()))
-		c.logger.V(3).Info("Finished processing service", "service", key)
+		c.logger.V(3).Info("alexkats: main: Controller: Finished processing service", "service", key)
 	}()
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
@@ -488,7 +492,7 @@ func (c *Controller) processService(key string) error {
 		}
 	}
 	if len(svcPortInfoMap) != 0 {
-		c.logger.V(2).Info("Syncing service", "service", key)
+		c.logger.V(2).Info("alexkats: main: Controller: Syncing service", "service", key)
 		if err = c.syncNegStatusAnnotation(namespace, name, svcPortInfoMap); err != nil {
 			return err
 		}
@@ -497,7 +501,7 @@ func (c *Controller) processService(key string) error {
 		return err
 	}
 	// do not need Neg
-	c.logger.V(3).Info("Service does not need any NEG. Skipping", "service", key)
+	c.logger.V(3).Info("alexkats: main: Controller: Service does not need any NEG. Skipping", "service", key)
 	c.usageCollector.DeleteNegService(key)
 	// neg annotation is not found or NEG is not enabled
 	c.manager.StopSyncer(namespace, name)

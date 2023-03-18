@@ -165,11 +165,8 @@ const (
 // IsHTTPErrorCode checks if the given error matches the given HTTP Error code.
 // For this to work the error must be a googleapi Error.
 func IsHTTPErrorCode(err error, code int) bool {
-	if err == nil {
-		return false
-	}
-	apiErr, ok := err.(*googleapi.Error)
-	return ok && apiErr.Code == code
+	var apiErr *googleapi.Error
+	return errors.As(err, &apiErr) && apiErr.Code == code
 }
 
 // ToNamespacedName returns a types.NamespacedName struct parsed from namespace/name.
@@ -253,7 +250,21 @@ func IsNotFoundError(err error) bool {
 
 // IsQuotaExceededError returns true if the quota was exceeded
 func IsQuotaExceededError(err error) bool {
-	return IsHTTPErrorCode(err, http.StatusTooManyRequests)
+	return IsHTTPErrorCode(err, http.StatusTooManyRequests) || isGCEError(err, "rateLimitExceeded")
+}
+
+func isGCEError(err error, reason string) bool {
+	var apiErr *googleapi.Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	for _, e := range apiErr.Errors {
+		if e.Reason == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // IsForbiddenError returns true if the operation was forbidden

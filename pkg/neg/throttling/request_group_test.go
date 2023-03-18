@@ -1,6 +1,7 @@
 package throttling
 
 import (
+	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"sync"
 	"testing"
 	"time"
@@ -38,14 +39,14 @@ type fakeThrottlingStrategy struct {
 	*delayRequestTracker
 }
 
-func (strategy *fakeThrottlingStrategy) GetDelay() time.Duration {
+func (strategy *fakeThrottlingStrategy) Delay() time.Duration {
 	strategy.lock.Lock()
 	defer strategy.lock.Unlock()
 	defer strategy.setDelayRequested(true)
 	return strategy.currentDelay
 }
 
-func (strategy *fakeThrottlingStrategy) PushFeedback(_ error) {}
+func (strategy *fakeThrottlingStrategy) Observe(_ error) {}
 
 func (strategy *fakeThrottlingStrategy) setDelay(delay time.Duration) {
 	strategy.lock.Lock()
@@ -129,7 +130,7 @@ func TestDefaultRequestGroup(t *testing.T) {
 	strategy := newFakeThrottlingStrategy()
 	rh := newRequestHelper()
 	rg := &defaultRequestGroup[NoResponse]{
-		strategies: map[meta.Version]Strategy{meta.VersionGA: strategy},
+		strategies: map[meta.Version]cloud.ThrottlingStrategy{meta.VersionGA: strategy},
 		clock:      fakeClock,
 	}
 	req := func() (NoResponse, error) {
@@ -163,7 +164,7 @@ func TestParallelRequestsNonBlocked(t *testing.T) {
 	strategy := newFakeThrottlingStrategy()
 	rh := newRequestHelper()
 	rg := &defaultRequestGroup[NoResponse]{
-		strategies: map[meta.Version]Strategy{meta.VersionGA: strategy},
+		strategies: map[meta.Version]cloud.ThrottlingStrategy{meta.VersionGA: strategy},
 		clock:      fakeClock,
 	}
 	req := func() (NoResponse, error) {
@@ -187,7 +188,7 @@ func TestGroupBlock(t *testing.T) {
 	strategy := newFakeThrottlingStrategy()
 	rh := newRequestHelper()
 	rg := &defaultRequestGroup[NoResponse]{
-		strategies: map[meta.Version]Strategy{meta.VersionGA: strategy},
+		strategies: map[meta.Version]cloud.ThrottlingStrategy{meta.VersionGA: strategy},
 		clock:      fakeClock,
 	}
 	req := func() (NoResponse, error) {

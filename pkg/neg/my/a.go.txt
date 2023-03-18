@@ -1,0 +1,69 @@
+/*package main
+
+import (
+	"fmt"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
+	"k8s.io/apimachinery/pkg/util/sets"
+	negtypes "k8s.io/ingress-gce/pkg/neg/types"
+	"net/http"
+)
+
+func main() {
+	//err1 := &googleapi.Error{
+	//	Code: http.StatusForbidden,
+	//	Errors: []googleapi.ErrorItem{{
+	//		Reason:  "rateLimitExceeded",
+	//		Message: "he",
+	//	}},
+	//}
+	//err2 := fmt.Errorf("param, %w: err = %w", negtypes.ErrCurrentNegEPNotFound, err1)
+	//var apiErr *googleapi.Error
+	//fmt.Println(errors.As(err2, &apiErr))
+	foo()
+}
+
+func foo() {
+	err1 := &googleapi.Error{
+		Code:    http.StatusForbidden,
+		Message: "Quota exceeded for quota metric 'Network endpoint list requests' and limit 'Network endpoint list requests per minute per region' of service 'compute.googleapis.com' for consumer 'project_number:1056207245313'.",
+		Details: []interface{}{
+			&compute.ErrorInfo{
+				Domain: "googleapis.com",
+				Metadatas: map[string]string{
+					"consumer":          "projects/1056207245313",
+					"quota_limit":       "NetworkEndpointListRequestsPerMinutePerProjectPerRegion",
+					"quota_limit_value": "1500",
+					"quota_location":    "us-central1",
+					"quota_metric":      "compute.googleapis.com/network_endpoint_list_requests_per_region",
+					"service":           "compute.googleapis.com",
+				},
+				Reason: "RATE_LIMIT_EXCEEDED",
+			},
+			&compute.Help{
+				Links: []*compute.HelpLink{{
+					Description: "Request a higher quota limit.",
+					Url:         "https://cloud.google.com/docs/quota#requesting_higher_quota",
+				}},
+			},
+		},
+		Errors: []googleapi.ErrorItem{{
+			Reason:  "rateLimitExceeded",
+			Message: "Quota exceeded for quota metric 'Network endpoint list requests' and limit 'Network endpoint list requests per minute per region' of service 'compute.googleapis.com' for consumer 'project_number:1056207245313'.",
+		}},
+	}
+	err2 := fmt.Errorf("%w: %w", negtypes.ErrQuotaExceededWithStrategy, err1)
+	err3 := fmt.Errorf("Failed to lookup NEG in zone %q, candidate zones %v, err - %w", "us-central1-c", sets.NewString("us-central1-c"), err2)
+	err4 := fmt.Errorf("%w: %w", negtypes.ErrCurrentNegEPNotFound, err3)
+	fmt.Printf("%v\n", err4)
+	//syncErr := negtypes.ClassifyDeepestError(err4)
+	//fmt.Println(syncErr.Reason)
+	//err2 := fmt.Errorf("Failed to lookup NEG in zone %q, candidate zones %v, err - %w", "us-central1-c", sets.NewString("us-central1-c"), err1)
+	//err3 := fmt.Errorf("%w: %w", negtypes.ErrCurrentNegEPNotFound, err2)
+	//fmt.Printf("%v\n", err3)
+	//if syncErr := negtypes.ClassifyError(err3); syncErr.IsErrorState {
+	//	fmt.Println(321)
+	//}
+	//fmt.Println(456)
+}
+*/
