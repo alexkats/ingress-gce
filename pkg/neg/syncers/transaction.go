@@ -496,6 +496,19 @@ func (s *transactionSyncer) operationInternal(operation transactionOp, zone stri
 		networkEndpoints = append(networkEndpoints, ne)
 	}
 
+	wg1 := &sync.WaitGroup{}
+	wg1.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(iter int) {
+			_, err := s.cloud.ListNetworkEndpoints(s.NegSyncerKey.NegName, zone, true, s.NegSyncerKey.GetAPIVersion())
+			if err != nil {
+				s.logger.Error(err, "alexkats: main: Transaction: Failed to ListNetworkEndpoint in NEG inside my iterations", "neg", s.NegSyncerKey.String(), "iteration", iter)
+			}
+			wg1.Done()
+		}(i)
+	}
+	wg1.Wait()
+
 	if operation == attachOp {
 		err = s.cloud.AttachNetworkEndpoints(s.NegSyncerKey.NegName, zone, networkEndpoints, s.NegSyncerKey.GetAPIVersion())
 	}

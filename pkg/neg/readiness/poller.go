@@ -155,6 +155,18 @@ func (p *poller) Poll(key negMeta) (retry bool, err error) {
 
 	p.logger.V(2).Info("polling NEG", "neg", key.Name, "negZone", key.Zone)
 	// TODO(freehan): filter the NEs that are in interest once the API supports it
+	wg := &sync.WaitGroup{}
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(iter int) {
+			_, err := p.negCloud.ListNetworkEndpoints(key.Name, key.Zone /*showHealthStatus*/, true, key.SyncerKey.GetAPIVersion())
+			if err != nil {
+				p.logger.Error(err, "alexkats: main: Poller: Failed to ListNetworkEndpoint in NEG inside my iterations", "neg", key.String(), "iteration", iter)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
 	res, err := p.negCloud.ListNetworkEndpoints(key.Name, key.Zone /*showHealthStatus*/, true, key.SyncerKey.GetAPIVersion())
 	if err != nil {
 		// On receiving GCE API error, do not retry immediately. This is to prevent the reflector to overwhelm the GCE NEG API when
