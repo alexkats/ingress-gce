@@ -3,6 +3,8 @@ package throttling
 import (
 	"fmt"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
+	negtypes "k8s.io/ingress-gce/pkg/neg/types"
+	"k8s.io/ingress-gce/pkg/utils"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +117,9 @@ func (g *defaultRequestGroup[R]) Run(f func() (R, error), version meta.Version) 
 	g.delayIfNeeded(strategy)
 	res, err := f()
 	strategy.Observe(err)
+	if utils.IsQuotaExceededError(err) {
+		err = fmt.Errorf("%w: %w", negtypes.ErrQuotaExceededWithStrategy, err)
+	}
 	return res, err
 }
 

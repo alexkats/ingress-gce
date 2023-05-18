@@ -18,7 +18,9 @@ package types
 
 import (
 	"fmt"
+	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"k8s.io/ingress-gce/pkg/utils"
+	"strings"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
@@ -45,15 +47,33 @@ const (
 
 // NewAdapter takes a Cloud and returns a NetworkEndpointGroupCloud.
 func NewAdapter(g *gce.Cloud) NetworkEndpointGroupCloud {
-	return NewStrategyAdapter(g, false)
+	return NewStrategyAdapter(g, []string{})
 }
 
-func NewStrategyAdapter(g *gce.Cloud, strategy bool) NetworkEndpointGroupCloud {
+func NewStrategyAdapter(g *gce.Cloud, specs []string) NetworkEndpointGroupCloud {
+	strategyKeys := make(map[cloud.RateLimitKey]struct{})
+	for _, spec := range specs {
+		params := strings.Split(spec, ",")
+		if params[1] != "strategy" {
+			continue
+		}
+		keyParams := strings.Split(params[0], ".")
+		version := meta.Version(keyParams[0])
+		service := keyParams[1]
+		operation := keyParams[2]
+		key := cloud.RateLimitKey{
+			ProjectID: "",
+			Operation: operation,
+			Version:   version,
+			Service:   service,
+		}
+		strategyKeys[key] = struct{}{}
+	}
 	return &cloudProviderAdapter{
 		c:             g,
 		networkURL:    g.NetworkURL(),
 		subnetworkURL: g.SubnetworkURL(),
-		strategy:      strategy,
+		strategyKeys:  strategyKeys,
 	}
 }
 
@@ -62,7 +82,7 @@ func NewAdapterWithNetwork(g *gce.Cloud, network, subnetwork string) NetworkEndp
 		c:             g,
 		networkURL:    network,
 		subnetworkURL: subnetwork,
-		strategy:      false,
+		strategyKeys:  make(map[cloud.RateLimitKey]struct{}),
 	}
 }
 
@@ -72,7 +92,7 @@ type cloudProviderAdapter struct {
 	c             *gce.Cloud
 	networkURL    string
 	subnetworkURL string
-	strategy      bool
+	strategyKeys  map[cloud.RateLimitKey]struct{}
 }
 
 // GetNetworkEndpointGroup implements NetworkEndpointGroupCloud.
@@ -106,7 +126,8 @@ func (a *cloudProviderAdapter) DeleteNetworkEndpointGroup(name string, zone stri
 func (a cloudProviderAdapter) AttachNetworkEndpoints(name, zone string, endpoints []*composite.NetworkEndpoint, version meta.Version) error {
 	req := &composite.NetworkEndpointGroupsAttachEndpointsRequest{NetworkEndpoints: endpoints}
 	err := composite.AttachNetworkEndpoints(a.c, meta.ZonalKey(name, zone), version, req)
-	if err != nil && a.strategy && utils.IsQuotaExceededError(err) {
+	_, ok := a.strategyKeys[fmt.Sprintf("%s.%s.%s", version, negServiceName, attachNetworkEndpoints)]
+	if err != nil && a.strategyKeys && utils.IsQuotaExceededError(err) {
 		err = fmt.Errorf("%w: %w", ErrQuotaExceededWithStrategy, err)
 	}
 	return err

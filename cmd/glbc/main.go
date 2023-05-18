@@ -354,7 +354,7 @@ func runControllers(ctx *ingctx.ControllerContext) {
 		return strings.Split(elem, ",")[1]
 	})
 	klog.V(3).Infof("alexkats: main: Main: strategy is %v", strategy)
-	cloud := negtypes.NewStrategyAdapter(ctx.Cloud, strategy)
+	cloud := negtypes.NewStrategyAdapter(ctx.Cloud, strategy, flags.F.GCERateLimit.Values())
 	// TODO: Refactor NEG to use cloud mocks so ctx.Cloud can be referenced within NewController.
 	negController := neg.NewController(
 		ctx.KubeClient,
